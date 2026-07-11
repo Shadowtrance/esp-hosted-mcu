@@ -35,6 +35,10 @@
 #include "esp_bt.h"
 #endif
 
+#ifdef CONFIG_ESP_HOSTED_ESPNOW_BRIDGE
+#include "slave_espnow_bridge.h"
+#endif
+
 #include "endian.h"
 
 #include <protocomm.h>
@@ -1300,6 +1304,10 @@ void app_main(void)
 
 #ifdef CONFIG_EXAMPLE_PEER_DATA_TRANSFER
 	example_peer_data_transfer_init();
+#endif
+
+#ifdef CONFIG_ESP_HOSTED_ESPNOW_BRIDGE
+	slave_espnow_bridge_init();
 #endif
 
 #ifdef CONFIG_ESP_HOSTED_COPROCESSOR_EXAMPLE_LIGHT_SLEEP

@@ -82,6 +82,11 @@ if(CONFIG_ESP_HOSTED_ENABLE_PEER_DATA_TRANSFER)
 	list(APPEND COMPONENT_SRCS example_peer_data_transfer.c)
 endif()
 
+if(CONFIG_ESP_HOSTED_ESPNOW_BRIDGE)
+	list(APPEND COMPONENT_SRCS slave_espnow_bridge.c)
+	list(APPEND COMPONENT_ADD_INCLUDEDIRS "${common_dir}/espnow_bridge")
+endif()
+
 if(CONFIG_ESP_HOSTED_COPROCESSOR_EXAMPLE_LIGHT_SLEEP)
 	list(APPEND COMPONENT_SRCS example_light_sleep.c)
 endif()

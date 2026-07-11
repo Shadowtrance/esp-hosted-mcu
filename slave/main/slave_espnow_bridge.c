@@ -1,0 +1,176 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Tactility
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Slave-side ESP-NOW bridge: forwards ESP-NOW init/peer/send requests from
+ * the host (over esp_hosted's custom RPC channel) to the real esp_now_*
+ * API, and pushes RX/send-status events back to the host the same way.
+ *
+ * Depends on WiFi already being brought up by the existing slave_wifi_std.c
+ * path (esp_wifi_init/mode/start) — this file only touches esp_now_*.
+ */
+
+#include "sdkconfig.h"
+
+#ifdef CONFIG_ESP_HOSTED_ESPNOW_BRIDGE
+
+#include <string.h>
+#include <inttypes.h>
+#include "esp_now.h"
+#include "esp_log.h"
+#include "esp_hosted_peer_data.h"
+#include "esp_hosted_espnow_bridge_proto.h"
+#include "slave_espnow_bridge.h"
+
+static const char *TAG = "espnow_bridge";
+
+static bool espnow_bridge_initialized = false;
+
+static void send_status_resp(uint32_t resp_msg_id, esp_err_t err)
+{
+    espnow_bridge_resp_status_t resp = { .esp_err = (int32_t)err };
+    esp_err_t ret = esp_hosted_send_custom_data(resp_msg_id, (const uint8_t *)&resp, sizeof(resp));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send resp 0x%" PRIx32 ": %d", resp_msg_id, ret);
+    }
+}
+
+static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int data_len)
+{
+    if (data_len < 0 || data_len > ESPNOW_BRIDGE_MAX_DATA_LEN) {
+        ESP_LOGW(TAG, "Dropping oversized/invalid RX (%d bytes)", data_len);
+        return;
+    }
+
+    espnow_bridge_evt_recv_t evt = {0};
+    memcpy(evt.src_addr, info->src_addr, ESPNOW_BRIDGE_ETH_ALEN);
+    memcpy(evt.des_addr, info->des_addr, ESPNOW_BRIDGE_ETH_ALEN);
+    evt.rssi = info->rx_ctrl ? info->rx_ctrl->rssi : 0;
+    evt.channel = info->rx_ctrl ? info->rx_ctrl->channel : 0;
+    evt.data_len = (uint16_t)data_len;
+    memcpy(evt.data, data, data_len);
+
+    esp_err_t ret = esp_hosted_send_custom_data(ESPNOW_BRIDGE_EVT_RECV, (const uint8_t *)&evt, sizeof(evt));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to forward RX event: %d", ret);
+    }
+}
+
+static void espnow_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_status_t status)
+{
+    espnow_bridge_evt_send_status_t evt = {0};
+    if (tx_info && tx_info->des_addr) {
+        memcpy(evt.peer_addr, tx_info->des_addr, ESPNOW_BRIDGE_ETH_ALEN);
+    }
+    evt.success = (status == ESP_NOW_SEND_SUCCESS);
+
+    esp_err_t ret = esp_hosted_send_custom_data(ESPNOW_BRIDGE_EVT_SEND_STATUS, (const uint8_t *)&evt, sizeof(evt));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to forward send-status event: %d", ret);
+    }
+}
+
+static void on_req_init(uint32_t msg_id, const uint8_t *data, size_t data_len, void *ctx)
+{
+    (void)msg_id; (void)ctx;
+    if (data_len != sizeof(espnow_bridge_req_init_t)) {
+        send_status_resp(ESPNOW_BRIDGE_RESP_INIT, ESP_ERR_INVALID_SIZE);
+        return;
+    }
+    const espnow_bridge_req_init_t *req = (const espnow_bridge_req_init_t *)data;
+
+    esp_err_t ret = esp_now_init();
+    if (ret == ESP_OK) {
+        ret = esp_now_register_recv_cb(espnow_recv_cb);
+    }
+    if (ret == ESP_OK) {
+        ret = esp_now_register_send_cb(espnow_send_cb);
+    }
+    if (ret == ESP_OK) {
+        ret = esp_now_set_pmk(req->pmk);
+    }
+    if (ret == ESP_OK) {
+        espnow_bridge_initialized = true;
+    }
+    send_status_resp(ESPNOW_BRIDGE_RESP_INIT, ret);
+}
+
+static void on_req_deinit(uint32_t msg_id, const uint8_t *data, size_t data_len, void *ctx)
+{
+    (void)msg_id; (void)data; (void)data_len; (void)ctx;
+    esp_err_t ret = esp_now_deinit();
+    espnow_bridge_initialized = false;
+    send_status_resp(ESPNOW_BRIDGE_RESP_DEINIT, ret);
+}
+
+static void on_req_add_peer(uint32_t msg_id, const uint8_t *data, size_t data_len, void *ctx)
+{
+    (void)msg_id; (void)ctx;
+    if (data_len != sizeof(espnow_bridge_req_add_peer_t)) {
+        send_status_resp(ESPNOW_BRIDGE_RESP_ADD_PEER, ESP_ERR_INVALID_SIZE);
+        return;
+    }
+    const espnow_bridge_req_add_peer_t *req = (const espnow_bridge_req_add_peer_t *)data;
+
+    esp_now_peer_info_t peer = {0};
+    memcpy(peer.peer_addr, req->peer_addr, ESPNOW_BRIDGE_ETH_ALEN);
+    memcpy(peer.lmk, req->lmk, ESPNOW_BRIDGE_KEY_LEN);
+    peer.channel = req->channel;
+    peer.ifidx = WIFI_IF_STA;
+    peer.encrypt = req->encrypt;
+
+    esp_err_t ret = esp_now_add_peer(&peer);
+    if (ret == ESP_ERR_ESPNOW_EXIST) {
+        ret = esp_now_mod_peer(&peer);
+    }
+    send_status_resp(ESPNOW_BRIDGE_RESP_ADD_PEER, ret);
+}
+
+static void on_req_send(uint32_t msg_id, const uint8_t *data, size_t data_len, void *ctx)
+{
+    (void)msg_id; (void)ctx;
+    if (data_len != sizeof(espnow_bridge_req_send_t)) {
+        send_status_resp(ESPNOW_BRIDGE_RESP_SEND, ESP_ERR_INVALID_SIZE);
+        return;
+    }
+    const espnow_bridge_req_send_t *req = (const espnow_bridge_req_send_t *)data;
+    if (req->data_len > ESPNOW_BRIDGE_MAX_DATA_LEN) {
+        send_status_resp(ESPNOW_BRIDGE_RESP_SEND, ESP_ERR_INVALID_SIZE);
+        return;
+    }
+
+    esp_err_t ret = esp_now_send(req->broadcast ? NULL : req->dest_addr, req->data, req->data_len);
+    send_status_resp(ESPNOW_BRIDGE_RESP_SEND, ret);
+}
+
+esp_err_t slave_espnow_bridge_init(void)
+{
+    esp_err_t ret;
+
+    ret = esp_hosted_register_custom_callback(ESPNOW_BRIDGE_REQ_INIT, on_req_init, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register REQ_INIT handler: %d", ret);
+        return ret;
+    }
+    ret = esp_hosted_register_custom_callback(ESPNOW_BRIDGE_REQ_DEINIT, on_req_deinit, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register REQ_DEINIT handler: %d", ret);
+        return ret;
+    }
+    ret = esp_hosted_register_custom_callback(ESPNOW_BRIDGE_REQ_ADD_PEER, on_req_add_peer, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register REQ_ADD_PEER handler: %d", ret);
+        return ret;
+    }
+    ret = esp_hosted_register_custom_callback(ESPNOW_BRIDGE_REQ_SEND, on_req_send, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register REQ_SEND handler: %d", ret);
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "ESP-NOW bridge handlers registered");
+    return ESP_OK;
+}
+
+#endif /* CONFIG_ESP_HOSTED_ESPNOW_BRIDGE */

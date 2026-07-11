@@ -24,6 +24,18 @@ menu "Example Configuration"
 		help
 			Disable if you do not need Wi-Fi support on the co-processor
 
+	config ESP_HOSTED_ESPNOW_BRIDGE
+		depends on ESP_HOSTED_CP_WIFI
+		depends on ESP_HOSTED_ENABLE_PEER_DATA_TRANSFER
+		bool "Enable ESP-NOW bridge for radio-less hosts (e.g. ESP32-P4)"
+		default n
+		help
+			Bridges ESP-NOW init/peer-management/send/recv over the custom
+			RPC (peer data transfer) channel, so a host with no native
+			radio (e.g. ESP32-P4) can drive real esp_now_* calls running
+			on this co-processor. Requires CONFIG_ESP_HOSTED_MAX_CUSTOM_MSG_HANDLERS
+			to have enough free slots (this feature registers 4 handlers).
+
 	config ESP_HOSTED_COPROCESSOR_APP_MAIN
 		bool "Use ESP-Hosted coprocessor app_main"
 		default y
