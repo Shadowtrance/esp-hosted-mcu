@@ -7,20 +7,18 @@ esp-hosted-mcu) can drive real ESP-NOW running on this co-processor.
 Off by default. To build a slave image with it enabled (e.g. for M5Stack Tab5,
 P4 host + C6 co-processor):
 
-**Important**: if `slave/sdkconfig` or `slave/build/` already exist from a
-previous build (even a plain one without these flags), delete them first.
-`-D CONFIG_X=y` on the `idf.py` command line only reliably takes effect on a
-fresh configure — if a resolved value for that symbol already exists in
-`sdkconfig`, the new `-D` override is silently ignored and you'll get a clean
-build with the bridge missing (no error, no warning).
+**Important**: `-D CONFIG_X=y` on the `idf.py` command line does NOT work for
+this — ESP-IDF 5.5.2's kconfig generation (`tools/cmake/kconfig.cmake`) only
+ever reads `--defaults` files; it never looks at `CONFIG_*` CMake cache
+variables (confirmed by reading the actual `kconfgen` invocation and by
+reproducing the failure on a clean tree — the flags land in `CMakeCache.txt`
+but are silently dropped before reaching the generated `sdkconfig`, no error).
+Use the checked-in `sdkconfig.defaults.espnow_bridge` file instead:
 
 ```
 cd slave
 rm -rf build sdkconfig
-idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32c6" \
-    -D CONFIG_ESP_HOSTED_ESPNOW_BRIDGE=y \
-    -D CONFIG_ESP_HOSTED_ENABLE_PEER_DATA_TRANSFER=y \
-    -D CONFIG_ESP_HOSTED_MAX_CUSTOM_MSG_HANDLERS=8 \
+idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32c6;sdkconfig.defaults.espnow_bridge" \
     set-target esp32c6 build
 ```
 
