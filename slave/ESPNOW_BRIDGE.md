@@ -7,12 +7,27 @@ esp-hosted-mcu) can drive real ESP-NOW running on this co-processor.
 Off by default. To build a slave image with it enabled (e.g. for M5Stack Tab5,
 P4 host + C6 co-processor):
 
+**Important**: if `slave/sdkconfig` or `slave/build/` already exist from a
+previous build (even a plain one without these flags), delete them first.
+`-D CONFIG_X=y` on the `idf.py` command line only reliably takes effect on a
+fresh configure — if a resolved value for that symbol already exists in
+`sdkconfig`, the new `-D` override is silently ignored and you'll get a clean
+build with the bridge missing (no error, no warning).
+
 ```
+cd slave
+rm -rf build sdkconfig
 idf.py -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.esp32c6" \
     -D CONFIG_ESP_HOSTED_ESPNOW_BRIDGE=y \
     -D CONFIG_ESP_HOSTED_ENABLE_PEER_DATA_TRANSFER=y \
     -D CONFIG_ESP_HOSTED_MAX_CUSTOM_MSG_HANDLERS=8 \
     set-target esp32c6 build
+```
+
+Verify it actually took before flashing:
+```
+grep ESPNOW_BRIDGE sdkconfig                                # expect: CONFIG_ESP_HOSTED_ESPNOW_BRIDGE=y
+grep -c slave_espnow_bridge build/compile_commands.json      # expect: nonzero
 ```
 
 `CONFIG_ESP_HOSTED_MAX_CUSTOM_MSG_HANDLERS` must be raised from the default of
