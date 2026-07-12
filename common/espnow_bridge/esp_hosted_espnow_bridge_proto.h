@@ -43,7 +43,7 @@ extern "C" {
 typedef struct __attribute__((packed)) {
     uint8_t pmk[ESPNOW_BRIDGE_KEY_LEN];
     uint8_t channel;      /* 0 = use current STA/AP channel */
-    bool long_range;
+    uint8_t long_range;   /* bool as uint8_t: fixed 1-byte width for this hand-synced wire struct */
 } espnow_bridge_req_init_t;
 
 /* resp: ESPNOW_BRIDGE_RESP_DEINIT / RESP_ADD_PEER / RESP_SEND */
@@ -62,13 +62,13 @@ typedef struct __attribute__((packed)) {
     uint8_t peer_addr[ESPNOW_BRIDGE_ETH_ALEN];
     uint8_t lmk[ESPNOW_BRIDGE_KEY_LEN];
     uint8_t channel;
-    bool encrypt;
+    uint8_t encrypt;      /* bool as uint8_t: fixed 1-byte width for this hand-synced wire struct */
 } espnow_bridge_req_add_peer_t;
 
 /* req: ESPNOW_BRIDGE_REQ_SEND */
 typedef struct __attribute__((packed)) {
     uint8_t dest_addr[ESPNOW_BRIDGE_ETH_ALEN];
-    bool broadcast;   /* true: dest_addr ignored, esp_now_send(NULL, ...) */
+    uint8_t broadcast;    /* bool as uint8_t; true: dest_addr ignored, esp_now_send(NULL, ...) */
     uint16_t data_len;
     uint8_t data[ESPNOW_BRIDGE_MAX_DATA_LEN];
 } espnow_bridge_req_send_t;
@@ -86,7 +86,7 @@ typedef struct __attribute__((packed)) {
 /* event: ESPNOW_BRIDGE_EVT_SEND_STATUS (slave-initiated, unsolicited) */
 typedef struct __attribute__((packed)) {
     uint8_t peer_addr[ESPNOW_BRIDGE_ETH_ALEN];
-    bool success;
+    uint8_t success;      /* bool as uint8_t: fixed 1-byte width for this hand-synced wire struct */
 } espnow_bridge_evt_send_status_t;
 
 #ifdef __cplusplus
