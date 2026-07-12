@@ -33,8 +33,11 @@ extern "C" {
 
 #define ESPNOW_BRIDGE_ETH_ALEN  6
 #define ESPNOW_BRIDGE_KEY_LEN   16
-/* ESP-NOW v1.0 payload limit; bridge doesn't attempt v2.0 (1470B) in v1 of this feature. */
-#define ESPNOW_BRIDGE_MAX_DATA_LEN  250
+/* ESP-NOW v2.0 payload limit (ESP_NOW_MAX_DATA_LEN_V2 in esp_now.h). The slave reports its
+ * actual negotiated esp_now_get_version() back to the host in RESP_INIT; hosts talking to a
+ * v1.0-only slave still work, they just never send payloads over 250B (native ESP-NOW callers
+ * enforce that themselves based on the reported version, same as the non-bridged backend). */
+#define ESPNOW_BRIDGE_MAX_DATA_LEN  1470
 
 /* req: ESPNOW_BRIDGE_REQ_INIT */
 typedef struct __attribute__((packed)) {
@@ -43,10 +46,16 @@ typedef struct __attribute__((packed)) {
     bool long_range;
 } espnow_bridge_req_init_t;
 
-/* resp: ESPNOW_BRIDGE_RESP_INIT / RESP_DEINIT / RESP_ADD_PEER / RESP_SEND */
+/* resp: ESPNOW_BRIDGE_RESP_DEINIT / RESP_ADD_PEER / RESP_SEND */
 typedef struct __attribute__((packed)) {
     int32_t esp_err;   /* raw esp_err_t from the slave-side call */
 } espnow_bridge_resp_status_t;
+
+/* resp: ESPNOW_BRIDGE_RESP_INIT */
+typedef struct __attribute__((packed)) {
+    int32_t esp_err;        /* raw esp_err_t from the slave-side esp_now_init() call */
+    uint32_t espnow_version; /* esp_now_get_version() result, 0 if esp_err != ESP_OK */
+} espnow_bridge_resp_init_t;
 
 /* req: ESPNOW_BRIDGE_REQ_ADD_PEER */
 typedef struct __attribute__((packed)) {

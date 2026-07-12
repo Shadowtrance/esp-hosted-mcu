@@ -18,6 +18,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include "esp_now.h"
+#include "esp_wifi.h"
 #include "esp_log.h"
 #include "esp_hosted_peer_data.h"
 #include "esp_hosted_espnow_bridge_proto.h"
@@ -71,16 +72,72 @@ static void espnow_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_stat
     }
 }
 
+/**
+ * ESP-NOW requires the underlying WiFi driver to already be initialized (station/AP mode
+ * configured) - it isn't standalone. On this bridge, WiFi is normally only brought up on the
+ * slave when the host's own WiFi gets enabled (via the real Req_WifiInit RPC path in
+ * slave_wifi_std.c). If a host never enables WiFi (e.g. ESP-NOW-only usage, matching how ESP-NOW
+ * works standalone on native ESP32 chips), esp_now_init() would be called against an
+ * uninitialized WiFi driver and crash. Bring up minimal WiFi ourselves if needed.
+ *
+ * esp_wifi_init() is safe to call here even if the host's real WiFi path initializes it later
+ * (or already has) - slave_wifi_std.c wraps esp_wifi_init() (-Wl,--wrap=esp_wifi_init) and
+ * treats a call with the same config as a no-op returning ESP_OK.
+ */
+static esp_err_t ensure_wifi_ready(void)
+{
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    esp_err_t ret = esp_wifi_init(&cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_init() failed: %d", ret);
+        return ret;
+    }
+
+    ret = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "esp_wifi_set_mode() failed: %d", ret);
+        return ret;
+    }
+
+    ret = esp_wifi_start();
+    if (ret != ESP_OK && ret != ESP_ERR_WIFI_NOT_STOPPED) {
+        ESP_LOGE(TAG, "esp_wifi_start() failed: %d", ret);
+        return ret;
+    }
+
+    return ESP_OK;
+}
+
+static void send_init_resp(esp_err_t err)
+{
+    espnow_bridge_resp_init_t resp = { .esp_err = (int32_t)err, .espnow_version = 0 };
+    if (err == ESP_OK) {
+        uint32_t version = 0;
+        if (esp_now_get_version(&version) == ESP_OK) {
+            resp.espnow_version = version;
+        } else {
+            ESP_LOGW(TAG, "esp_now_get_version() failed - reporting version 0 to host");
+        }
+    }
+    esp_err_t ret = esp_hosted_send_custom_data(ESPNOW_BRIDGE_RESP_INIT, (const uint8_t *)&resp, sizeof(resp));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to send RESP_INIT: %d", ret);
+    }
+}
+
 static void on_req_init(uint32_t msg_id, const uint8_t *data, size_t data_len, void *ctx)
 {
     (void)msg_id; (void)ctx;
     if (data_len != sizeof(espnow_bridge_req_init_t)) {
-        send_status_resp(ESPNOW_BRIDGE_RESP_INIT, ESP_ERR_INVALID_SIZE);
+        send_init_resp(ESP_ERR_INVALID_SIZE);
         return;
     }
     const espnow_bridge_req_init_t *req = (const espnow_bridge_req_init_t *)data;
 
-    esp_err_t ret = esp_now_init();
+    esp_err_t ret = ensure_wifi_ready();
+    if (ret == ESP_OK) {
+        ret = esp_now_init();
+    }
     if (ret == ESP_OK) {
         ret = esp_now_register_recv_cb(espnow_recv_cb);
     }
@@ -93,7 +150,7 @@ static void on_req_init(uint32_t msg_id, const uint8_t *data, size_t data_len, v
     if (ret == ESP_OK) {
         espnow_bridge_initialized = true;
     }
-    send_status_resp(ESPNOW_BRIDGE_RESP_INIT, ret);
+    send_init_resp(ret);
 }
 
 static void on_req_deinit(uint32_t msg_id, const uint8_t *data, size_t data_len, void *ctx)
