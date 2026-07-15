@@ -84,7 +84,7 @@ static void espnow_send_cb(const esp_now_send_info_t *tx_info, esp_now_send_stat
  * (or already has) - slave_wifi_std.c wraps esp_wifi_init() (-Wl,--wrap=esp_wifi_init) and
  * treats a call with the same config as a no-op returning ESP_OK.
  */
-static esp_err_t ensure_wifi_ready(void)
+static esp_err_t ensure_wifi_ready(wifi_mode_t mode)
 {
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_err_t ret = esp_wifi_init(&cfg);
@@ -93,7 +93,7 @@ static esp_err_t ensure_wifi_ready(void)
         return ret;
     }
 
-    ret = esp_wifi_set_mode(WIFI_MODE_STA);
+    ret = esp_wifi_set_mode(mode);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_mode() failed: %d", ret);
         return ret;
@@ -133,8 +133,25 @@ static void on_req_init(uint32_t msg_id, const uint8_t *data, size_t data_len, v
         return;
     }
     const espnow_bridge_req_init_t *req = (const espnow_bridge_req_init_t *)data;
+    wifi_mode_t wifi_mode = (req->mode == ESPNOW_BRIDGE_MODE_ACCESS_POINT) ? WIFI_MODE_AP : WIFI_MODE_STA;
 
-    esp_err_t ret = ensure_wifi_ready();
+    esp_err_t ret = ensure_wifi_ready(wifi_mode);
+
+    /* An unassociated STA's operating channel is otherwise left undefined/wherever it last
+     * scanned to - ESP-NOW then silently fails to reach peers on a different channel even though
+     * esp_now_send() reports success. Only skip this when actually connected to an AP (station
+     * mode already locked to the AP's channel; forcing a different one would disrupt that link). */
+    if (ret == ESP_OK && req->channel != 0 && wifi_mode == WIFI_MODE_STA) {
+        wifi_ap_record_t ap_info;
+        bool is_connected = esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK;
+        if (!is_connected) {
+            esp_err_t chan_ret = esp_wifi_set_channel(req->channel, WIFI_SECOND_CHAN_NONE);
+            if (chan_ret != ESP_OK) {
+                ESP_LOGW(TAG, "esp_wifi_set_channel() failed: %d - ESP-NOW may not reach peers", chan_ret);
+            }
+        }
+    }
+
     if (ret == ESP_OK) {
         ret = esp_now_init();
     }
@@ -174,7 +191,7 @@ static void on_req_add_peer(uint32_t msg_id, const uint8_t *data, size_t data_le
     memcpy(peer.peer_addr, req->peer_addr, ESPNOW_BRIDGE_ETH_ALEN);
     memcpy(peer.lmk, req->lmk, ESPNOW_BRIDGE_KEY_LEN);
     peer.channel = req->channel;
-    peer.ifidx = WIFI_IF_STA;
+    peer.ifidx = (req->ifidx == ESPNOW_BRIDGE_MODE_ACCESS_POINT) ? WIFI_IF_AP : WIFI_IF_STA;
     peer.encrypt = req->encrypt;
 
     esp_err_t ret = esp_now_add_peer(&peer);

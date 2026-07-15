@@ -39,11 +39,17 @@ extern "C" {
  * enforce that themselves based on the reported version, same as the non-bridged backend). */
 #define ESPNOW_BRIDGE_MAX_DATA_LEN  1470
 
+/* req_init mode: matches tt::service::espnow::Mode / WIFI_MODE_STA vs WIFI_MODE_AP on the slave */
+#define ESPNOW_BRIDGE_MODE_STATION       0U
+#define ESPNOW_BRIDGE_MODE_ACCESS_POINT  1U
+
 /* req: ESPNOW_BRIDGE_REQ_INIT */
 typedef struct __attribute__((packed)) {
     uint8_t pmk[ESPNOW_BRIDGE_KEY_LEN];
     uint8_t channel;      /* 0 = use current STA/AP channel */
     uint8_t long_range;   /* bool as uint8_t: fixed 1-byte width for this hand-synced wire struct */
+    uint8_t mode;         /* ESPNOW_BRIDGE_MODE_STATION / ESPNOW_BRIDGE_MODE_ACCESS_POINT: which WiFi
+                            * mode+interface the slave should bring up and register ESP-NOW against */
 } espnow_bridge_req_init_t;
 
 /* resp: ESPNOW_BRIDGE_RESP_DEINIT / RESP_ADD_PEER / RESP_SEND */
@@ -63,6 +69,9 @@ typedef struct __attribute__((packed)) {
     uint8_t lmk[ESPNOW_BRIDGE_KEY_LEN];
     uint8_t channel;
     uint8_t encrypt;      /* bool as uint8_t: fixed 1-byte width for this hand-synced wire struct */
+    uint8_t ifidx;        /* ESPNOW_BRIDGE_MODE_STATION / ESPNOW_BRIDGE_MODE_ACCESS_POINT: which
+                            * interface (WIFI_IF_STA / WIFI_IF_AP) to bind the peer to on the slave,
+                            * matching esp_now_peer_info_t::ifidx on native */
 } espnow_bridge_req_add_peer_t;
 
 /* req: ESPNOW_BRIDGE_REQ_SEND */
