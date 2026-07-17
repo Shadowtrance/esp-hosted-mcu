@@ -144,12 +144,16 @@ static void on_req_init(uint32_t msg_id, const uint8_t *data, size_t data_len, v
     if (ret == ESP_OK && req->channel != 0 && wifi_mode == WIFI_MODE_STA) {
         wifi_ap_record_t ap_info;
         bool is_connected = esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK;
+        ESP_LOGI(TAG, "REQ_INIT channel handling: req->channel=%u, is_connected=%d", req->channel, (int)is_connected);
         if (!is_connected) {
             esp_err_t chan_ret = esp_wifi_set_channel(req->channel, WIFI_SECOND_CHAN_NONE);
+            ESP_LOGI(TAG, "esp_wifi_set_channel(%u) returned %d", req->channel, chan_ret);
             if (chan_ret != ESP_OK) {
                 ESP_LOGW(TAG, "esp_wifi_set_channel() failed: %d - ESP-NOW may not reach peers", chan_ret);
             }
         }
+    } else {
+        ESP_LOGI(TAG, "REQ_INIT channel handling skipped: ret=%d, req->channel=%u, mode=%d", ret, req->channel, (int)wifi_mode);
     }
 
     if (ret == ESP_OK) {
