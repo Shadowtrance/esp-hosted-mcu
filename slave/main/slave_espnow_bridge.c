@@ -28,9 +28,9 @@ static const char *TAG = "espnow_bridge";
 
 static bool espnow_bridge_initialized = false;
 
-static void send_status_resp(uint32_t resp_msg_id, esp_err_t err)
+static void send_status_resp(uint32_t resp_msg_id, uint32_t txn_id, esp_err_t err)
 {
-    espnow_bridge_resp_status_t resp = { .esp_err = (int32_t)err };
+    espnow_bridge_resp_status_t resp = { .txn_id = txn_id, .esp_err = (int32_t)err };
     esp_err_t ret = esp_hosted_send_custom_data(resp_msg_id, (const uint8_t *)&resp, sizeof(resp));
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to send resp 0x%" PRIx32 ": %d", resp_msg_id, ret);
@@ -108,9 +108,9 @@ static esp_err_t ensure_wifi_ready(wifi_mode_t mode)
     return ESP_OK;
 }
 
-static void send_init_resp(esp_err_t err)
+static void send_init_resp(uint32_t txn_id, esp_err_t err)
 {
-    espnow_bridge_resp_init_t resp = { .esp_err = (int32_t)err, .espnow_version = 0 };
+    espnow_bridge_resp_init_t resp = { .txn_id = txn_id, .esp_err = (int32_t)err, .espnow_version = 0 };
     if (err == ESP_OK) {
         uint32_t version = 0;
         if (esp_now_get_version(&version) == ESP_OK) {
@@ -129,7 +129,7 @@ static void on_req_init(uint32_t msg_id, const uint8_t *data, size_t data_len, v
 {
     (void)msg_id; (void)ctx;
     if (data_len != sizeof(espnow_bridge_req_init_t)) {
-        send_init_resp(ESP_ERR_INVALID_SIZE);
+        send_init_resp(0, ESP_ERR_INVALID_SIZE);
         return;
     }
     const espnow_bridge_req_init_t *req = (const espnow_bridge_req_init_t *)data;
@@ -144,16 +144,12 @@ static void on_req_init(uint32_t msg_id, const uint8_t *data, size_t data_len, v
     if (ret == ESP_OK && req->channel != 0 && wifi_mode == WIFI_MODE_STA) {
         wifi_ap_record_t ap_info;
         bool is_connected = esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK;
-        ESP_LOGI(TAG, "REQ_INIT channel handling: req->channel=%u, is_connected=%d", req->channel, (int)is_connected);
         if (!is_connected) {
             esp_err_t chan_ret = esp_wifi_set_channel(req->channel, WIFI_SECOND_CHAN_NONE);
-            ESP_LOGI(TAG, "esp_wifi_set_channel(%u) returned %d", req->channel, chan_ret);
             if (chan_ret != ESP_OK) {
                 ESP_LOGW(TAG, "esp_wifi_set_channel() failed: %d - ESP-NOW may not reach peers", chan_ret);
             }
         }
-    } else {
-        ESP_LOGI(TAG, "REQ_INIT channel handling skipped: ret=%d, req->channel=%u, mode=%d", ret, req->channel, (int)wifi_mode);
     }
 
     if (ret == ESP_OK) {
@@ -171,22 +167,26 @@ static void on_req_init(uint32_t msg_id, const uint8_t *data, size_t data_len, v
     if (ret == ESP_OK) {
         espnow_bridge_initialized = true;
     }
-    send_init_resp(ret);
+    send_init_resp(req->txn_id, ret);
 }
 
 static void on_req_deinit(uint32_t msg_id, const uint8_t *data, size_t data_len, void *ctx)
 {
-    (void)msg_id; (void)data; (void)data_len; (void)ctx;
+    (void)msg_id; (void)ctx;
+    uint32_t txn_id = 0;
+    if (data_len == sizeof(espnow_bridge_req_deinit_t)) {
+        txn_id = ((const espnow_bridge_req_deinit_t *)data)->txn_id;
+    }
     esp_err_t ret = esp_now_deinit();
     espnow_bridge_initialized = false;
-    send_status_resp(ESPNOW_BRIDGE_RESP_DEINIT, ret);
+    send_status_resp(ESPNOW_BRIDGE_RESP_DEINIT, txn_id, ret);
 }
 
 static void on_req_add_peer(uint32_t msg_id, const uint8_t *data, size_t data_len, void *ctx)
 {
     (void)msg_id; (void)ctx;
     if (data_len != sizeof(espnow_bridge_req_add_peer_t)) {
-        send_status_resp(ESPNOW_BRIDGE_RESP_ADD_PEER, ESP_ERR_INVALID_SIZE);
+        send_status_resp(ESPNOW_BRIDGE_RESP_ADD_PEER, 0, ESP_ERR_INVALID_SIZE);
         return;
     }
     const espnow_bridge_req_add_peer_t *req = (const espnow_bridge_req_add_peer_t *)data;
@@ -202,24 +202,24 @@ static void on_req_add_peer(uint32_t msg_id, const uint8_t *data, size_t data_le
     if (ret == ESP_ERR_ESPNOW_EXIST) {
         ret = esp_now_mod_peer(&peer);
     }
-    send_status_resp(ESPNOW_BRIDGE_RESP_ADD_PEER, ret);
+    send_status_resp(ESPNOW_BRIDGE_RESP_ADD_PEER, req->txn_id, ret);
 }
 
 static void on_req_send(uint32_t msg_id, const uint8_t *data, size_t data_len, void *ctx)
 {
     (void)msg_id; (void)ctx;
     if (data_len != sizeof(espnow_bridge_req_send_t)) {
-        send_status_resp(ESPNOW_BRIDGE_RESP_SEND, ESP_ERR_INVALID_SIZE);
+        send_status_resp(ESPNOW_BRIDGE_RESP_SEND, 0, ESP_ERR_INVALID_SIZE);
         return;
     }
     const espnow_bridge_req_send_t *req = (const espnow_bridge_req_send_t *)data;
     if (req->data_len > ESPNOW_BRIDGE_MAX_DATA_LEN) {
-        send_status_resp(ESPNOW_BRIDGE_RESP_SEND, ESP_ERR_INVALID_SIZE);
+        send_status_resp(ESPNOW_BRIDGE_RESP_SEND, req->txn_id, ESP_ERR_INVALID_SIZE);
         return;
     }
 
     esp_err_t ret = esp_now_send(req->broadcast ? NULL : req->dest_addr, req->data, req->data_len);
-    send_status_resp(ESPNOW_BRIDGE_RESP_SEND, ret);
+    send_status_resp(ESPNOW_BRIDGE_RESP_SEND, req->txn_id, ret);
 }
 
 esp_err_t slave_espnow_bridge_init(void)
